@@ -1,109 +1,106 @@
+#include <ESP8266WiFi.h>
+#include <ESP8266HTTPClient.h>
+#include <ArduinoJson.h>
 #include <SoftwareSerial.h>
 
-SoftwareSerial ArduinoSerial(3, 2);  // Rx, TX
-
-int ledPin = 8;
 String IncomindData = "";
 String Temp = "";
+boolean isBulkReq = true;
 
-  const int analogIn = A0;
-  int mVperAmp = 100; // use 100 for 20A Module and 66 for 30A Module
-  int RawValue= 0;
-  int ACSoffset = 2500;
-  double Voltage = 0;
-  double Amps = 0;
-  float power = 0;
-  float energy_KWH = 0;
-  uint32_t lastTime=0;
-  uint32_t currentTime=0;
-  uint32_t timeInterval=1000;
-  String motorStatus = "Off";
-  
+const char* ssid = "redmiSY";
+const char* password = "0913937686";
+
+String url = "ec2-18-217-238-61.us-east-2.compute.amazonaws.com:3000/api/testArduino";
+
+SoftwareSerial NodeSerial(D2, D3);  // RX | TX
+
 void setup() {
-  // put your setup code here, to run once:
-  Serial.begin(115200);
-  ArduinoSerial.begin(4800);
+    // put your setup code here, to run once:
+    pinMode(D2, INPUT);
+    pinMode(D3, OUTPUT);
+    Serial.begin(115200);
+    NodeSerial.begin(4800);
 
-  pinMode(ledPin, OUTPUT);
-  digitalWrite(ledPin, LOW);
+    Serial.print("IoT Foundation URL: ");
+    Serial.println(url);
+
+    Serial.print("Connecting to: ");
+    Serial.print(ssid);
+    WiFi.begin(ssid, password);
+    while (WiFi.status() != WL_CONNECTED) {
+        delay(500);
+        Serial.print(".");
+    }
+
+    Serial.print("nWiFi connected, IP address: ");
+    Serial.println(WiFi.localIP());
 }
 
 void loop() {
-  currentTime=millis();
-  // put your main code here, to run repeatedly:
-  
-    while (ArduinoSerial.available() > 0) {
-      Serial.println("From arduino side Inside while");
-      char var = ArduinoSerial.read();
-      Temp = String(var);
-      IncomindData+= Temp;
+    // put your main code here, to run repeatedly:
 
-//      if (ArduinoSerial.read() =='\n') {
-//        Serial.println("From arduino side");
-//        Serial.println(val);
-//
-//        if(val == 10) {
-//          Serial.print("Turn Off The Bulb1");
-//          motorStatus = "Off";
-////          digitalWrite(ledPin, LOW);
-//        } else if (val == 11) {
-//          Serial.print("Turn On The Bulb1");
-//          motorStatus = "On";
-////          digitalWrite(ledPin, HIGH);
-//        } else if (val == 404) {
-//          Serial.print("Turn Off The Bulb2");
-//          motorStatus = "Off";
-//          digitalWrite(ledPin, LOW);
-//        } else if (val == 200) {
-//          Serial.print("Turn On The Bulb2");
-//          motorStatus = "On";
-//          digitalWrite(ledPin, HIGH);
-//        } else {
-//          Serial.print("TUnmatched value returned");
-//          Serial.print(val);
-//        }
-//      }
-
+//read data from arduino
+    while (NodeSerial.available() > 0) {
+//      Serial.println("From Nodemcu side Inside while");
+        char var = NodeSerial.read();
+        Temp = String(var);
+        IncomindData += Temp;
     }
-    
+
     Serial.println(IncomindData);
-    IncomingData = "";
-   
 
-//Power Consumption Code
+    HTTPClient http;
+    http.begin("http://ec2-18-217-238-61.us-east-2.compute.amazonaws.com:3000/api/testArduino");
 
-if(motorStatus == "On") {
-  RawValue = analogRead(analogIn);
-  Voltage = (RawValue / 1024.0) * 5000; // Gets you mV
-  Amps = ((Voltage - ACSoffset) / mVperAmp);
+    int httpCode = http.GET();                                                                  //Send the request
 
-  power = (Voltage/1000)*Amps;
-  energy_KWH = energy_KWH + (power/1000)* (currentTime - lastTime)/(60*60*1000);
+    if (httpCode > 0) { //Check the returning code
+        String
+        payload = http.getString();   //Get the request response payload
+        //Serial.println(payload);                     //Print the response payload
 
-Serial.print("Raw Value = " ); // shows pre-scaled value
-Serial.print(RawValue);
-Serial.print("\t mV = "); // shows the voltage measured
-Serial.print(Voltage,3);
-// the '3' after voltage allows you to display 3 digits after decimal point
-Serial.print("\t Amps = "); // shows the voltage measured
-Serial.print(Amps,3);
-// the '3' after voltage allows you to display 3 digits after decimal point
+        if (payload.indexOf("devicePort1") > -1) {
+            NodeSerial.print(payload);
+            NodeSerial.print("\n");
+        }
 
-Serial.print("  Power Value = " );
-Serial.print(power); 
+        if (payload.indexOf("isBulkReq-true") > -1) {
+            isBulkReq = true;
+        }
+    } else {
+        Serial.println("Get Bulb Data fails");
+    }
 
-Serial.print("  KWH  Value = " );
-Serial.print(energy_KWH,6); 
-Serial.println();
 
-  lastTime =millis(); 
-}
+    Serial.println("httpCode");
+    Serial.println(httpCode);
+    http.end();
 
-    
+//Send Bulb kwh Data to the server
+    if (isBulkReq) {
+        http.begin("http://ec2-18-217-238-61.us-east-2.compute.amazonaws.com:3000/api/testArduino");
+        http.addHeader("Content-Type", "application/json");
 
-// swnd data to nodemcu
-    ArduinoSerial.print(energy_KWH, 6);
-    ArduinoSerial.print("\n");
-    
+        StaticJsonBuffer < 300 > JSONbuffer;   //Declaring static JSON buffer
+        JsonObject & JSONencoder = JSONbuffer.createObject();
+
+        JSONencoder["deviceMessage"] = IncomindData;
+
+        char JSONmessageBuffer[300];
+        JSONencoder.prettyPrintTo(JSONmessageBuffer, sizeof(JSONmessageBuffer));
+        Serial.println(JSONmessageBuffer);
+
+        int httpCode2 = http.POST(JSONmessageBuffer);
+        String payload2 = http.getString();
+
+        Serial.print("POST payload: ");
+        Serial.println(payload2);
+        Serial.print("HTTP POST Response: ");
+        Serial.println(httpCode2); // HTTP code 200 means ok
+        http.end();
+        isBulkReq = false;
+    }
+
+    IncomindData = "";
     delay(100);
 }
